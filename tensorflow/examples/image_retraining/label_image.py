@@ -44,7 +44,9 @@ from __future__ import print_function
 
 import argparse
 import sys
+import os.path
 
+import pandas as pd
 import tensorflow as tf
 
 parser = argparse.ArgumentParser()
@@ -105,14 +107,16 @@ def run_graph(image_data, labels, input_layer_name, output_layer_name,
     softmax_tensor = sess.graph.get_tensor_by_name(output_layer_name)
     predictions, = sess.run(softmax_tensor, {input_layer_name: image_data})
 
-    # Sort to show labels in order of confidence
-    top_k = predictions.argsort()[-num_top_predictions:][::-1]
-    for node_id in top_k:
-      human_string = labels[node_id]
-      score = predictions[node_id]
-      print('%s (score = %.5f)' % (human_string, score))
+    # print('(score = %.5f)' % predictions[0])
 
-    return 0
+    # Sort to show labels in order of confidence
+    # top_k = predictions.argsort()[-num_top_predictions:][::-1]
+    # for node_id in top_k:
+    # human_string = labels[top_k[0]]
+    # score = predictions[top_k[0]]
+    # print('%s (score = %.5f)' % (human_string, score))
+
+    return predictions[0]
 
 
 def main(argv):
@@ -129,17 +133,28 @@ def main(argv):
   if not tf.gfile.Exists(FLAGS.graph):
     tf.logging.fatal('graph file does not exist %s', FLAGS.graph)
 
-  # load image
-  image_data = load_image(FLAGS.image)
-
-  # load labels
-  labels = load_labels(FLAGS.labels)
-
   # load graph, which is stored in the default session
   load_graph(FLAGS.graph)
 
-  run_graph(image_data, labels, FLAGS.input_layer, FLAGS.output_layer,
+
+  output_df = pd.DataFrame(columns=['name','invasive'])
+
+  for index in range(1, 1532):
+    # load image
+    image_data = load_image(os.path.join("/home/jys/Documents/kaggle/invasive_species_monitoring/test/", str(index)+".jpg"))
+
+    # load labels
+    labels = load_labels(FLAGS.labels)
+
+
+    score = run_graph(image_data, labels, FLAGS.input_layer, FLAGS.output_layer,
             FLAGS.num_top_predictions)
+
+    output_df.loc[index] =  [int(index), '%.9f' % float(score)]
+    print('{} is {}'.format(index, score))
+
+  print(output_df)
+  output_df.to_csv("/home/jys/Documents/kaggle/invasive_species_monitoring/result.csv", index = False)
 
 
 if __name__ == '__main__':

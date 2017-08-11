@@ -107,6 +107,7 @@ import numpy as np
 from six.moves import urllib
 import tensorflow as tf
 
+import pandas as pd
 from tensorflow.python.framework import graph_util
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.platform import gfile
@@ -122,7 +123,7 @@ FLAGS = None
 MAX_NUM_IMAGES_PER_CLASS = 2 ** 27 - 1  # ~134M
 
 
-def create_image_lists(image_dir, testing_percentage, validation_percentage):
+def create_image_lists(image_dir, testing_percentage, train_labels_path, validation_percentage):
   """Builds a list of training images from the file system.
 
   Analyzes the sub folders in the image directory, splits them into stable
@@ -138,37 +139,14 @@ def create_image_lists(image_dir, testing_percentage, validation_percentage):
     A dictionary containing an entry for each label subfolder, with images split
     into training, testing, and validation sets within each label.
   """
-  if not gfile.Exists(image_dir):
-    tf.logging.error("Image directory '" + image_dir + "' not found.")
-    return None
+
+  train_labels = pd.read_csv(train_labels_path, names = ['name', 'invasive'])
+  train_labels_positive = train_labels[train_labels['invasive'] == "1"]['name'].tolist()
+  train_labels_negative = train_labels[train_labels['invasive'] == "0"]['name'].tolist()
+
   result = {}
-  sub_dirs = [x[0] for x in gfile.Walk(image_dir)]
-  # The root directory comes first, so skip it.
-  is_root_dir = True
-  for sub_dir in sub_dirs:
-    if is_root_dir:
-      is_root_dir = False
-      continue
-    extensions = ['jpg', 'jpeg', 'JPG', 'JPEG']
-    file_list = []
-    dir_name = os.path.basename(sub_dir)
-    if dir_name == image_dir:
-      continue
-    tf.logging.info("Looking for images in '" + dir_name + "'")
-    for extension in extensions:
-      file_glob = os.path.join(image_dir, dir_name, '*.' + extension)
-      file_list.extend(gfile.Glob(file_glob))
-    if not file_list:
-      tf.logging.warning('No files found')
-      continue
-    if len(file_list) < 20:
-      tf.logging.warning(
-          'WARNING: Folder has less than 20 images, which may cause issues.')
-    elif len(file_list) > MAX_NUM_IMAGES_PER_CLASS:
-      tf.logging.warning(
-          'WARNING: Folder {} has more than {} images. Some images will '
-          'never be selected.'.format(dir_name, MAX_NUM_IMAGES_PER_CLASS))
-    label_name = re.sub(r'[^a-z0-9]+', ' ', dir_name.lower())
+
+  def get_random_data_set(file_list):
     training_images = []
     testing_images = []
     validation_images = []
@@ -197,12 +175,21 @@ def create_image_lists(image_dir, testing_percentage, validation_percentage):
         testing_images.append(base_name)
       else:
         training_images.append(base_name)
-    result[label_name] = {
-        'dir': dir_name,
-        'training': training_images,
-        'testing': testing_images,
-        'validation': validation_images,
+    return {
+      'training': training_images,
+      'testing': testing_images,
+      'validation': validation_images,
     }
+
+  dic_positive = get_random_data_set(train_labels_positive)
+  dic_positive['dir'] = image_dir
+
+  dic_negative = get_random_data_set(train_labels_negative)
+  dic_negative['dir'] = image_dir
+
+  result['positive'] = dic_positive
+  result['negative'] = dic_negative
+
   return result
 
 
@@ -235,7 +222,7 @@ def get_image_path(image_lists, label_name, index, image_dir, category):
   mod_index = index % len(category_list)
   base_name = category_list[mod_index]
   sub_dir = label_lists['dir']
-  full_path = os.path.join(image_dir, sub_dir, base_name)
+  full_path = os.path.join(image_dir, base_name) + '.jpg'
   return full_path
 
 
@@ -256,8 +243,10 @@ def get_bottleneck_path(image_lists, label_name, index, bottleneck_dir,
   Returns:
     File system path string to an image that meets the requested parameters.
   """
-  return get_image_path(image_lists, label_name, index, bottleneck_dir,
-                        category) + '_' + architecture + '.txt'
+  image_path = get_image_path(image_lists, label_name, index, bottleneck_dir,
+                        category)
+
+  return image_path + '_' + architecture + '.txt'
 
 
 def create_model_graph(model_info):
@@ -995,6 +984,7 @@ def main(_):
 
   # Look at the folder structure, and create lists of all the images.
   image_lists = create_image_lists(FLAGS.image_dir, FLAGS.testing_percentage,
+                                   FLAGS.train_lables_path,
                                    FLAGS.validation_percentage)
   class_count = len(image_lists.keys())
   if class_count == 0:
@@ -1006,10 +996,14 @@ def main(_):
                      ' - multiple classes are needed for classification.')
     return -1
 
+  print("class_count is {}".format(class_count))
+
   # See if the command-line flags mean we're applying any distortions.
   do_distort_images = should_distort_images(
       FLAGS.flip_left_right, FLAGS.random_crop, FLAGS.random_scale,
       FLAGS.random_brightness)
+
+  print("do_distort_images is {}".format('true' if do_distort_images else 'false'))
 
   with tf.Session(graph=graph) as sess:
     # Set up the image decoding sub-graph.
@@ -1194,7 +1188,7 @@ if __name__ == '__main__':
   parser.add_argument(
       '--how_many_training_steps',
       type=int,
-      default=4000,
+      default=1000,
       help='How many training steps to run before ending.'
   )
   parser.add_argument(
@@ -1331,6 +1325,13 @@ if __name__ == '__main__':
       less accurate, but smaller and faster network that's 920 KB on disk and
       takes 128x128 images. See https://research.googleblog.com/2017/06/mobilenets-open-source-models-for.html
       for more information on Mobilenet.\
+      """)
+  parser.add_argument(
+      '--train_lables_path',
+      type=str,
+      default='/home/jys/Documents/kaggle/invasive_species_monitoring/train_labels.csv',
+      help="""\
+      path to train_lables.csv which includes mapping from image id to label\
       """)
   FLAGS, unparsed = parser.parse_known_args()
   tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
