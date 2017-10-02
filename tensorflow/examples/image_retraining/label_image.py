@@ -51,8 +51,6 @@ import tensorflow as tf
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    '--image', required=True, type=str, help='Absolute path to image file.')
-parser.add_argument(
     '--num_top_predictions',
     type=int,
     default=5,
@@ -62,11 +60,6 @@ parser.add_argument(
     required=True,
     type=str,
     help='Absolute path to graph file (.pb)')
-parser.add_argument(
-    '--labels',
-    required=True,
-    type=str,
-    help='Absolute path to labels file (.txt)')
 parser.add_argument(
     '--output_layer',
     type=str,
@@ -102,8 +95,7 @@ def load_graph(filename):
     tf.import_graph_def(graph_def, name='')
 
 
-def run_graph(image_data, labels, input_layer_name, output_layer_name,
-              num_top_predictions):
+def run_graph(image_data, input_layer_name, output_layer_name):
   with tf.Session() as sess:
     # Feed the image_data as input to the graph.
     #   predictions  will contain a two-dimensional array, where one
@@ -113,15 +105,6 @@ def run_graph(image_data, labels, input_layer_name, output_layer_name,
     keep_prob = sess.graph.get_tensor_by_name('final_training_ops/dropout/keep_prob:0')
     predictions, = sess.run(softmax_tensor, {input_layer_name: image_data, keep_prob: 1.0})
 
-    # print('(score = %.5f)' % predictions[0])
-
-    # Sort to show labels in order of confidence
-    # top_k = predictions.argsort()[-num_top_predictions:][::-1]
-    # for node_id in top_k:
-    # human_string = labels[top_k[0]]
-    # score = predictions[top_k[0]]
-    # print('%s (score = %.5f)' % (human_string, score))
-
     return predictions[0]
 
 
@@ -130,11 +113,11 @@ def main(argv):
   if argv[1:]:
     raise ValueError('Unused Command Line Args: %s' % argv[1:])
 
-  if not tf.gfile.Exists(FLAGS.image):
-    tf.logging.fatal('image file does not exist %s', FLAGS.image)
+  if not tf.gfile.Exists(FLAGS.test_image_dir):
+    tf.logging.fatal('test images dir does not exist %s', FLAGS.image)
 
-  if not tf.gfile.Exists(FLAGS.labels):
-    tf.logging.fatal('labels file does not exist %s', FLAGS.labels)
+  # if not tf.gfile.Exists(FLAGS.labels):
+  #     tf.logging.fatal('labels file does not exist %s', FLAGS.labels)
 
   if not tf.gfile.Exists(FLAGS.graph):
     tf.logging.fatal('graph file does not exist %s', FLAGS.graph)
@@ -142,27 +125,18 @@ def main(argv):
   # load graph, which is stored in the default session
   load_graph(FLAGS.graph)
 
+  output_df = pd.DataFrame(columns=['name', 'invasive'])
 
-  output_df = pd.DataFrame(columns=['name','invasive'])
-
-  for index in range(1, 1532):
+  for index in range(1, FLAGS.count_test_files + 1):
     # load image
-    image_data = load_image(os.path.join("/home/jys/Documents/kaggle/invasive_species_monitoring/test/", str(index)+".jpg"))
-
-    # load labels
-    labels = load_labels(FLAGS.labels)
-
-
-    score = run_graph(image_data, labels, FLAGS.input_layer, FLAGS.output_layer,
-            FLAGS.num_top_predictions)
-
-    output_df.loc[index] =  [int(index), '%.9f' % float(score)]
-    print('{} is {}'.format(index, score))
+    image_data = load_image(index)
+    score = run_graph(image_data, FLAGS.input_layer, FLAGS.output_layer)
+    output_df.loc[index] = [int(index), '%.9f' % float(score)]
 
   print(output_df)
-  output_df.to_csv(os.path.join("/home/jys/Documents/kaggle/invasive_species_monitoring/results", FLAGS.csv + ".csv"), index = False)
+  output_df.to_csv(FLAGS.csv, index=False)
 
 
 if __name__ == '__main__':
   FLAGS, unparsed = parser.parse_known_args()
-  tf.app.run(main=main, argv=sys.argv[:1]+unparsed)
+  tf.app.run(main=main, argv=sys.argv[:1] + unparsed)
