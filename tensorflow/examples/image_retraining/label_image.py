@@ -77,6 +77,11 @@ parser.add_argument(
     type=str,
     default='DecodeJpeg/contents:0',
     help='Name of the input operation')
+parser.add_argument(
+    '--csv',
+    type=str,
+    default='',
+    help='output csv file name')
 
 
 def load_image(filename):
@@ -105,7 +110,8 @@ def run_graph(image_data, labels, input_layer_name, output_layer_name,
     #   dimension represents the input image count, and the other has
     #   predictions per class
     softmax_tensor = sess.graph.get_tensor_by_name(output_layer_name)
-    predictions, = sess.run(softmax_tensor, {input_layer_name: image_data})
+    keep_prob = sess.graph.get_tensor_by_name('final_training_ops/dropout/keep_prob:0')
+    predictions, = sess.run(softmax_tensor, {input_layer_name: image_data, keep_prob: 1.0})
 
     # print('(score = %.5f)' % predictions[0])
 
@@ -154,7 +160,7 @@ def main(argv):
     print('{} is {}'.format(index, score))
 
   print(output_df)
-  output_df.to_csv("/home/jys/Documents/kaggle/invasive_species_monitoring/result.csv", index = False)
+  output_df.to_csv(os.path.join("/home/jys/Documents/kaggle/invasive_species_monitoring/results", FLAGS.csv + ".csv"), index = False)
 
 
 if __name__ == '__main__':
