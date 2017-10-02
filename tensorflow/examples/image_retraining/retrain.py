@@ -107,6 +107,7 @@ import numpy as np
 from six.moves import urllib
 import tensorflow as tf
 
+import pandas as pd
 from tensorflow.python.framework import graph_util
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.platform import gfile
@@ -122,7 +123,7 @@ FLAGS = None
 MAX_NUM_IMAGES_PER_CLASS = 2 ** 27 - 1  # ~134M
 
 
-def create_image_lists(image_dir, testing_percentage, validation_percentage):
+def create_image_lists(image_dir, testing_percentage, train_labels_path, validation_percentage):
   """Builds a list of training images from the file system.
 
   Analyzes the sub folders in the image directory, splits them into stable
@@ -138,37 +139,14 @@ def create_image_lists(image_dir, testing_percentage, validation_percentage):
     A dictionary containing an entry for each label subfolder, with images split
     into training, testing, and validation sets within each label.
   """
-  if not gfile.Exists(image_dir):
-    tf.logging.error("Image directory '" + image_dir + "' not found.")
-    return None
+
+  train_labels = pd.read_csv(train_labels_path, names = ['name', 'invasive'])
+  train_labels_positive = train_labels[train_labels['invasive'] == "1"]['name'].tolist()
+  train_labels_negative = train_labels[train_labels['invasive'] == "0"]['name'].tolist()
+
   result = {}
-  sub_dirs = [x[0] for x in gfile.Walk(image_dir)]
-  # The root directory comes first, so skip it.
-  is_root_dir = True
-  for sub_dir in sub_dirs:
-    if is_root_dir:
-      is_root_dir = False
-      continue
-    extensions = ['jpg', 'jpeg', 'JPG', 'JPEG']
-    file_list = []
-    dir_name = os.path.basename(sub_dir)
-    if dir_name == image_dir:
-      continue
-    tf.logging.info("Looking for images in '" + dir_name + "'")
-    for extension in extensions:
-      file_glob = os.path.join(image_dir, dir_name, '*.' + extension)
-      file_list.extend(gfile.Glob(file_glob))
-    if not file_list:
-      tf.logging.warning('No files found')
-      continue
-    if len(file_list) < 20:
-      tf.logging.warning(
-          'WARNING: Folder has less than 20 images, which may cause issues.')
-    elif len(file_list) > MAX_NUM_IMAGES_PER_CLASS:
-      tf.logging.warning(
-          'WARNING: Folder {} has more than {} images. Some images will '
-          'never be selected.'.format(dir_name, MAX_NUM_IMAGES_PER_CLASS))
-    label_name = re.sub(r'[^a-z0-9]+', ' ', dir_name.lower())
+
+  def get_random_data_set(file_list):
     training_images = []
     testing_images = []
     validation_images = []
@@ -197,12 +175,60 @@ def create_image_lists(image_dir, testing_percentage, validation_percentage):
         testing_images.append(base_name)
       else:
         training_images.append(base_name)
-    result[label_name] = {
-        'dir': dir_name,
-        'training': training_images,
-        'testing': testing_images,
-        'validation': validation_images,
+    # print(training_images)
+    return {
+      'training': training_images,
+      'testing': testing_images,
+      'validation': validation_images,
     }
+
+  def get_real_random_data_set(file_list):
+    training_images = []
+    testing_images = []
+    validation_images = []
+    for file_name in file_list:
+      base_name = os.path.basename(file_name)
+      # We want to ignore anything after '_nohash_' in the file name when
+      # deciding which set to put an image in, the data set creator has a way of
+      # grouping photos that are close variations of each other. For example
+      # this is used in the plant disease data set to group multiple pictures of
+      # the same leaf.
+      hash_name = re.sub(r'_nohash_.*$', '', file_name)
+      # This looks a bit magical, but we need to decide whether this file should
+      # go into the training, testing, or validation sets, and we want to keep
+      # existing files in the same set even if more files are subsequently
+      # added.
+      # To do that, we need a stable way of deciding based on just the file name
+      # itself, so we do a hash of that and then use that to generate a
+      # probability value that we use to assign it.
+      hash_name_hashed = hashlib.sha1(compat.as_bytes(hash_name)).hexdigest()
+      percentage_hash = ((int(hash_name_hashed, 16) %
+                          (MAX_NUM_IMAGES_PER_CLASS + 1)) *
+                         (100.0 / MAX_NUM_IMAGES_PER_CLASS))
+      if random.random() < validation_percentage / 100.0:
+        validation_images.append(base_name)
+      else:
+        training_images.append(base_name)
+
+      if random.random()  < testing_percentage / 100.0:
+        testing_images.append(base_name)
+    # print(training_images)
+    return {
+      'training': training_images,
+      'testing': testing_images,
+      'validation': validation_images,
+    }
+
+
+  dic_positive = get_real_random_data_set(train_labels_positive)
+  dic_positive['dir'] = image_dir
+
+  dic_negative = get_real_random_data_set(train_labels_negative)
+  dic_negative['dir'] = image_dir
+
+  result['positive'] = dic_positive
+  result['negative'] = dic_negative
+
   return result
 
 
@@ -235,7 +261,7 @@ def get_image_path(image_lists, label_name, index, image_dir, category):
   mod_index = index % len(category_list)
   base_name = category_list[mod_index]
   sub_dir = label_lists['dir']
-  full_path = os.path.join(image_dir, sub_dir, base_name)
+  full_path = os.path.join(image_dir, base_name) + '.jpg'
   return full_path
 
 
@@ -256,8 +282,10 @@ def get_bottleneck_path(image_lists, label_name, index, bottleneck_dir,
   Returns:
     File system path string to an image that meets the requested parameters.
   """
-  return get_image_path(image_lists, label_name, index, bottleneck_dir,
-                        category) + '_' + architecture + '.txt'
+  image_path = get_image_path(image_lists, label_name, index, bottleneck_dir,
+                        category)
+
+  return image_path + '_' + architecture + '.txt'
 
 
 def create_model_graph(model_info):
@@ -480,7 +508,6 @@ def cache_bottlenecks(sess, image_lists, image_dir, bottleneck_dir,
         if how_many_bottlenecks % 100 == 0:
           tf.logging.info(
               str(how_many_bottlenecks) + ' bottleneck files created.')
-
 
 def get_random_cached_bottlenecks(sess, image_lists, how_many, category,
                                   bottleneck_dir, image_dir, jpeg_data_tensor,
@@ -771,24 +798,30 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor,
   with tf.name_scope(layer_name):
     with tf.name_scope('weights'):
       initial_value = tf.truncated_normal(
-          [bottleneck_tensor_size, class_count], stddev=0.001)
+          [1024, class_count], stddev=0.001)
 
       layer_weights = tf.Variable(initial_value, name='final_weights')
 
       variable_summaries(layer_weights)
+    with tf.name_scope('dropout'):
+      keep_prob = tf.placeholder(tf.float32, name='keep_prob')
+
+      dense = tf.layers.dense(inputs=bottleneck_input, units=1024, activation=tf.nn.relu)
+      drop = tf.nn.dropout(dense, keep_prob)
+      variable_summaries(drop)
     with tf.name_scope('biases'):
       layer_biases = tf.Variable(tf.zeros([class_count]), name='final_biases')
       variable_summaries(layer_biases)
     with tf.name_scope('Wx_plus_b'):
-      logits = tf.matmul(bottleneck_input, layer_weights) + layer_biases
+      logits = tf.matmul(drop, layer_weights) + layer_biases
       tf.summary.histogram('pre_activations', logits)
 
   final_tensor = tf.nn.softmax(logits, name=final_tensor_name)
   tf.summary.histogram('activations', final_tensor)
 
   with tf.name_scope('cross_entropy'):
-    cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
-        labels=ground_truth_input, logits=logits)
+    cross_entropy = tf.nn.weighted_cross_entropy_with_logits(
+      targets=ground_truth_input, logits=logits, pos_weight=FLAGS.pos_weight)
     with tf.name_scope('total'):
       cross_entropy_mean = tf.reduce_mean(cross_entropy)
   tf.summary.scalar('cross_entropy', cross_entropy_mean)
@@ -799,16 +832,15 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor,
     lr = tf.train.exponential_decay(
       learning_rate=FLAGS.learning_rate,
       global_step=global_step,
-      decay_steps=3500,
+      decay_steps=1000,
       decay_rate=0.7,
       staircase=True)
 
-
-    optimizer = tf.train.GradientDescentOptimizer(learning_rate = lr)
+    optimizer = tf.train.AdamOptimizer(learning_rate=0.0008, beta1=0.9, beta2=0.999, epsilon=1e-08)
     train_step = optimizer.minimize(cross_entropy_mean)
 
   return (train_step, cross_entropy_mean, bottleneck_input, ground_truth_input,
-          final_tensor)
+          final_tensor, keep_prob)
 
 
 def add_evaluation_step(result_tensor, ground_truth_tensor):
@@ -825,11 +857,22 @@ def add_evaluation_step(result_tensor, ground_truth_tensor):
   with tf.name_scope('accuracy'):
     with tf.name_scope('correct_prediction'):
       prediction = tf.argmax(result_tensor, 1)
+      argmax_y = tf.argmax(ground_truth_tensor, 1)
       correct_prediction = tf.equal(
-          prediction, tf.argmax(ground_truth_tensor, 1))
+          prediction, argmax_y)
     with tf.name_scope('accuracy'):
       evaluation_step = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+      TP = tf.count_nonzero(prediction * argmax_y, dtype=tf.float32)
+      TN = tf.count_nonzero((prediction - 1) * (argmax_y - 1), dtype=tf.float32)
+      FP = tf.count_nonzero(prediction * (argmax_y - 1), dtype=tf.float32)
+      FN = tf.count_nonzero((prediction - 1) * argmax_y, dtype=tf.float32)
+      # accuracy_positive = tf.gather(tf.reduce_mean(tf.cast(correct_prediction, tf.float32), 0), indices=[0])
   tf.summary.scalar('accuracy', evaluation_step)
+  tf.summary.scalar('TP', TP)
+  tf.summary.scalar('TN', TN)
+  tf.summary.scalar('FP', FP)
+  tf.summary.scalar('FN', FN)
+  # tf.summary.scalar('accuracy_positive', accuracy_positive)
   return evaluation_step, prediction
 
 
@@ -996,6 +1039,7 @@ def main(_):
 
   # Look at the folder structure, and create lists of all the images.
   image_lists = create_image_lists(FLAGS.image_dir, FLAGS.testing_percentage,
+                                   FLAGS.train_lables_path,
                                    FLAGS.validation_percentage)
   class_count = len(image_lists.keys())
   if class_count == 0:
@@ -1007,10 +1051,14 @@ def main(_):
                      ' - multiple classes are needed for classification.')
     return -1
 
+  print("class_count is {}".format(class_count))
+
   # See if the command-line flags mean we're applying any distortions.
   do_distort_images = should_distort_images(
       FLAGS.flip_left_right, FLAGS.random_crop, FLAGS.random_scale,
       FLAGS.random_brightness)
+
+  print("do_distort_images is {}".format('true' if do_distort_images else 'false'))
 
   with tf.Session(graph=graph) as sess:
     # Set up the image decoding sub-graph.
@@ -1037,10 +1085,10 @@ def main(_):
 
     # Add the new layer that we'll be training.
     (train_step, cross_entropy, bottleneck_input, ground_truth_input,
-     final_tensor) = add_final_training_ops(
+     final_tensor, keep_prob) = add_final_training_ops(
          len(image_lists.keys()), FLAGS.final_tensor_name, bottleneck_tensor,
          model_info['bottleneck_tensor_size'])
-
+    print('bottleneck_tensor_size is {}'.format(model_info['bottleneck_tensor_size']))
     # Create the operations we need to evaluate the accuracy of our new layer.
     evaluation_step, prediction = add_evaluation_step(
         final_tensor, ground_truth_input)
@@ -1079,7 +1127,8 @@ def main(_):
       train_summary, _ = sess.run(
           [merged, train_step],
           feed_dict={bottleneck_input: train_bottlenecks,
-                     ground_truth_input: train_ground_truth})
+                     ground_truth_input: train_ground_truth,
+                     keep_prob: FLAGS.keep_prob})
       train_writer.add_summary(train_summary, i)
 
       # Every so often, print out how well the graph is training.
@@ -1088,7 +1137,8 @@ def main(_):
         train_accuracy, cross_entropy_value = sess.run(
             [evaluation_step, cross_entropy],
             feed_dict={bottleneck_input: train_bottlenecks,
-                       ground_truth_input: train_ground_truth})
+                       ground_truth_input: train_ground_truth,
+                       keep_prob: 1.0})
         tf.logging.info('%s: Step %d: Train accuracy = %.1f%%' %
                         (datetime.now(), i, train_accuracy * 100))
         tf.logging.info('%s: Step %d: Cross entropy = %f' %
@@ -1104,7 +1154,8 @@ def main(_):
         validation_summary, validation_accuracy = sess.run(
             [merged, evaluation_step],
             feed_dict={bottleneck_input: validation_bottlenecks,
-                       ground_truth_input: validation_ground_truth})
+                       ground_truth_input: validation_ground_truth,
+                       keep_prob: 1.0})
         validation_writer.add_summary(validation_summary, i)
         tf.logging.info('%s: Step %d: Validation accuracy = %.1f%% (N=%d)' %
                         (datetime.now(), i, validation_accuracy * 100,
@@ -1132,7 +1183,8 @@ def main(_):
     test_accuracy, predictions = sess.run(
         [evaluation_step, prediction],
         feed_dict={bottleneck_input: test_bottlenecks,
-                   ground_truth_input: test_ground_truth})
+                   ground_truth_input: test_ground_truth,
+                   keep_prob: 1.0})
     tf.logging.info('Final test accuracy = %.1f%% (N=%d)' %
                     (test_accuracy * 100, len(test_bottlenecks)))
 
@@ -1195,7 +1247,7 @@ if __name__ == '__main__':
   parser.add_argument(
       '--how_many_training_steps',
       type=int,
-      default=4000,
+      default=1000,
       help='How many training steps to run before ending.'
   )
   parser.add_argument(
@@ -1207,7 +1259,7 @@ if __name__ == '__main__':
   parser.add_argument(
       '--testing_percentage',
       type=int,
-      default=10,
+      default=40,
       help='What percentage of images to use as a test set.'
   )
   parser.add_argument(
@@ -1332,6 +1384,27 @@ if __name__ == '__main__':
       less accurate, but smaller and faster network that's 920 KB on disk and
       takes 128x128 images. See https://research.googleblog.com/2017/06/mobilenets-open-source-models-for.html
       for more information on Mobilenet.\
+      """)
+  parser.add_argument(
+      '--train_lables_path',
+      type=str,
+      default='/home/jys/Documents/kaggle/invasive_species_monitoring/train_labels.csv',
+      help="""\
+      path to train_lables.csv which includes mapping from image id to label\
+      """)
+  parser.add_argument(
+      '--keep_prob',
+      type=str,
+      default='1.0',
+      help="""\
+      drop out rate\
+      """)
+  parser.add_argument(
+      '--pos_weight',
+      type=float,
+      default=1.0,
+      help="""\
+      pos_weight for weighted_cross_entropy_with_logits\
       """)
   FLAGS, unparsed = parser.parse_known_args()
   tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
