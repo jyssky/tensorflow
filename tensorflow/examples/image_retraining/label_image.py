@@ -75,10 +75,21 @@ parser.add_argument(
     type=str,
     default='',
     help='output csv file name')
+parser.add_argument(
+    '--test_image_dir',
+    type=str,
+    default='',
+    help='Directory for test images')
+parser.add_argument(
+    '--count_test_files',
+    type=int,
+    default=1531,
+    help='Count of test images in test_image_dir')
 
 
 def load_image(filename):
   """Read in the image_data to be classified."""
+  filename = os.path.join(FLAGS.test_image_dir, str(filename) +'.jpg')
   return tf.gfile.FastGFile(filename, 'rb').read()
 
 
