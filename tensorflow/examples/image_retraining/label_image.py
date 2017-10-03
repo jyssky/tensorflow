@@ -51,45 +51,45 @@ import tensorflow as tf
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    '--num_top_predictions',
-    type=int,
-    default=5,
-    help='Display this many predictions.')
+  '--num_top_predictions',
+  type=int,
+  default=5,
+  help='Display this many predictions.')
 parser.add_argument(
-    '--graph',
-    required=True,
-    type=str,
-    help='Absolute path to graph file (.pb)')
+  '--graph',
+  required=True,
+  type=str,
+  help='Absolute path to graph file (.pb)')
 parser.add_argument(
-    '--output_layer',
-    type=str,
-    default='final_result:0',
-    help='Name of the result operation')
+  '--output_layer',
+  type=str,
+  default='final_result:0',
+  help='Name of the result operation')
 parser.add_argument(
-    '--input_layer',
-    type=str,
-    default='DecodeJpeg/contents:0',
-    help='Name of the input operation')
+  '--input_layer',
+  type=str,
+  default='DecodeJpeg/contents:0',
+  help='Name of the input operation')
 parser.add_argument(
-    '--csv',
-    type=str,
-    default='',
-    help='output csv file name')
+  '--csv',
+  type=str,
+  default='',
+  help='output csv file name')
 parser.add_argument(
-    '--test_image_dir',
-    type=str,
-    default='',
-    help='Directory for test images')
+  '--test_image_dir',
+  type=str,
+  default='',
+  help='Directory for test images')
 parser.add_argument(
-    '--count_test_files',
-    type=int,
-    default=1531,
-    help='Count of test images in test_image_dir')
+  '--count_test_files',
+  type=int,
+  default=1531,
+  help='Count of test images in test_image_dir')
 
 
 def load_image(filename):
   """Read in the image_data to be classified."""
-  filename = os.path.join(FLAGS.test_image_dir, str(filename) +'.jpg')
+  filename = os.path.join(FLAGS.test_image_dir, str(filename) + '.jpg')
   return tf.gfile.FastGFile(filename, 'rb').read()
 
 
